@@ -2,88 +2,359 @@
 
 Internal MVP for The Date Crew: matchmakers sign in, see only their own clients, review verified profiles, get ranked and explained match suggestions, and send introductions.
 
-## Run locally
+## Run Locally
+
+### Prerequisites
+
+- Node.js and npm
+- An OpenAI API key (optional; the application uses template-based fallbacks when no key is configured)
+
+### Installation
 
 ```bash
 npm install
-cp .env.example .env.local     # optional for local dev (a dev-only secret is used if missing)
-npm run dev                    # http://localhost:3000
 ```
 
-**Sample logins** (password for both: `Welcome@TDC26`)
+Create your local environment file:
 
-| Username | Matchmaker       | Clients |
-|----------|------------------|---------|
-| `priya`  | Priya Raghavan   | 7       |
-| `arjun`  | Arjun Malhotra   | 7       |
+```bash
+cp .env.example .env.local
+```
 
-Other commands: `npm test` (matching engine), `npm run typecheck`, `npm run lint`, `npm run seed` (regenerate demo data, deterministic).
+This step is optional for local development if the application supports its development-only fallback secret. For production, configure a secure `AUTH_SECRET`.
 
-## Deploy (Vercel)
+Start the development server:
 
-1. Import the repo into Vercel (framework auto-detected).
-2. Set environment variables: `AUTH_SECRET` (**required**, `openssl rand -base64 48`), `OPENAI_API_KEY` (optional), `SHOW_DEMO_CREDENTIALS=true` (shows logins on the sign-in page; remove for a real deployment).
-3. Deploy. Render/Netlify also work: `npm run build` / `npm start`.
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+### Demo Accounts
+
+The following demo accounts are available for local testing:
+
+| Username | Matchmaker | Clients |
+|---|---|---:|
+| `priya` | Priya Raghavan | 7 |
+| `arjun` | Arjun Malhotra | 7 |
+
+**Demo password:** `Welcome@TDC26`
+
+These credentials are intended for demo use only. Do not reuse them for real accounts or production deployments.
+
+### Available Commands
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Start the development server |
+| `npm run build` | Build the application for production |
+| `npm start` | Start the production server |
+| `npm test` | Run matching-engine tests |
+| `npm run typecheck` | Check TypeScript types |
+| `npm run lint` | Run linting |
+| `npm run seed` | Regenerate deterministic demo data |
+
+## Deployment
+
+The application is designed for deployment on Vercel. Other Node.js-compatible hosting platforms may also work, depending on their runtime and storage requirements.
+
+### Deploy on Vercel
+
+1. Import the GitHub repository into Vercel.
+2. Configure the required environment variables.
+3. Deploy the application.
+4. Verify authentication, profile access, matching, and introduction workflows.
+
+### Environment Variables
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `AUTH_SECRET` | prod | Signs session cookies. The app refuses to start sessions in production without it. |
-| `OPENAI_API_KEY` | no | Enables LLM-written fit reasoning and intro drafts. Without it, labelled template drafts are used. |
-| `OPENAI_MODEL` | no | Defaults to `gpt-4o-mini`. |
-| `SHOW_DEMO_CREDENTIALS` | no | Shows sample logins on the login screen. |
+| `AUTH_SECRET` | Yes, in production | Signs session cookies. Use a strong, randomly generated secret. |
+| `OPENAI_API_KEY` | No | Enables AI-generated match explanations and introduction drafts. |
+| `OPENAI_MODEL` | No | Selects the OpenAI model. Defaults to `gpt-4o-mini`. |
+| `SHOW_DEMO_CREDENTIALS` | No | Controls whether demo login credentials are displayed on the sign-in page. |
+
+Generate a production secret with:
+
+```bash
+openssl rand -base64 48
+```
+
+Never commit `.env.local`, API keys, production secrets, or real customer data to Git.
+
+For production, disable the display of demo credentials and use secure, unique account credentials.
 
 ## Architecture
 
-```
+```text
 src/
-  middleware.ts            First auth gate: pages redirect, /api returns 401
-  app/                     Routes (server components) + route handlers under api/
-  components/              UI; client components only where state is needed
+  middleware.ts
+  app/
+    api/
+  components/
   lib/
-    auth/                  JWT session (jose), login rate limit
-    data/repository.ts     ONLY file that knows data is static JSON; also enforces ownership
-    matching/              factors.ts (pure scoring) · profiles.ts (weights per gender) · engine.ts (filter, score, rank, explain)
-    ai/                    openai.ts (client) · insight.ts (prompt + validation + cache) · fallback.ts (template drafts)
-    api.ts                 route() wrapper: session check, CSRF origin check, error envelope
-    mail.ts                Mail boundary (simulated)
-  data/                    Generated JSON: 14 clients, 240 candidates (120 women, 120 men), 2 matchmakers
+    auth/
+    data/
+      repository.ts
+    matching/
+      factors.ts
+      profiles.ts
+      engine.ts
+    ai/
+      openai.ts
+      insight.ts
+      fallback.ts
+    api.ts
+    mail.ts
+  data/
+
+scripts/
+  generate-data.mjs
 ```
 
-Request flow for matches: `GET /api/customers/:id/matches` → session → ownership check → opposite-gender pool → hard filters → weighted factors → ranked results with per-factor notes (contact details stripped). `POST /api/ai/insight` adds the LLM read; `POST /api/matches/send` validates and simulates the email.
+### Main Components
 
-### Data model
+- **Middleware:** Provides an initial authentication gate. Pages redirect unauthenticated users, while API routes return unauthorized responses.
+- **Application routes:** Contain the UI and API route handlers.
+- **Components:** Provide the interface, using client-side components where interaction or local state is required.
+- **Authentication:** Manages JWT-based sessions and login rate limiting.
+- **Data repository:** Centralizes access to the current static JSON data source and enforces ownership checks.
+- **Matching engine:** Applies hard filters, calculates weighted scores, ranks candidates, and explains the results.
+- **AI layer:** Generates match insights and personalized introduction drafts, with schema validation and fallback templates.
+- **Mail boundary:** Simulates email delivery and provides a boundary for integrating a real email provider.
+- **Generated data:** Contains synthetic demo profiles for 14 clients, 240 candidates (120 women and 120 men), and two matchmakers.
 
-`Profile` (shared by clients and pool candidates): the required biodata fields plus **familyType, familyValues, diet, manglik, drinking, smoking, communityPreference, relationshipIntent, partnerAgeMin/Max, educationLevel, postGraduation, interests, about**. `Customer = Profile + matchmakerId, status, joinedOn, intakeNote`. Age is derived from `dateOfBirth`; income is normalised to INR lakhs (LPA) so cross-border profiles compare. See `src/types/index.ts`.
+### Match Request Flow
 
-## Matching logic
+```text
+Matchmaker signs in
+        |
+        v
+Opens an assigned client
+        |
+        v
+GET /api/customers/:id/matches
+        |
+        v
+Session and ownership checks
+        |
+        v
+Hard filters and weighted scoring
+        |
+        v
+Ranked match suggestions
+        |
+        v
+AI-generated explanation (optional)
+        |
+        v
+Review and edit introduction
+        |
+        v
+POST /api/matches/send
+        |
+        v
+Simulated email delivery
+```
 
-1. **Hard filters (never shown):** same gender; either person outside the other's stated partner age range; a firm *yes* against a firm *no* on kids.
-2. **Weighted factors** (each returns 0–1 plus a plain-English note), combined with weights that are normalised, then squared so tiers separate (≥82 High potential, ≥70 Strong fit, otherwise Worth exploring).
-   - **Male clients** (`maleSeekerProfile`): age (younger) 18, kids 14, height (shorter) 12, income (less or similar) 12, location 10, community 10, family outlook 8, lifestyle 6, timeline 6, languages 2, manglik 2.
-   - **Female clients** (`femaleSeekerProfile`, values-first): family outlook 14, location & relocation 14, kids 12, life stage & intent 10, lifestyle 10, career 10, education 8, community 8, earning level 6, age (same to older) 6, height 3, languages 2, manglik 2.
-3. To extend: write a function in `factors.ts`, add it with a weight in `profiles.ts`. To add a new recipe (e.g. for second marriages), export another `MatchProfile`.
+The matching engine determines which candidates qualify and how they rank. The AI layer explains the results and drafts introductions. Candidate contact details are excluded from the AI dossier.
 
-## How AI is used
+## Data Model
 
-The engine decides *who* fits and by how much, which keeps scores auditable. The LLM then explains *why*, in a matchmaker's voice: a 2–3 sentence read with one honest tension, two talking points for the call, and a personalised intro email (70–100 words) that feeds the Send Match modal. The model receives a dossier with contact details removed, output is validated with Zod, and any failure (no key, timeout, bad JSON) falls back to a clearly labelled template draft built from the same match data.
+The shared `Profile` model contains biodata and matching preferences, including:
 
-## Security notes
+- Family type and family values
+- Diet, drinking, smoking, and manglik preferences
+- Community preferences
+- Relationship intent
+- Preferred partner age range
+- Education level and postgraduate education
+- Interests and personal description
 
-httpOnly, SameSite=Lax, Secure (prod) JWT cookie, 8h expiry · bcrypt (cost 12) with decoy compare to blunt username enumeration · login rate limiting · Zod validation on all inputs · ownership checks on every client/candidate lookup (other matchmakers' clients return 404) · Origin check on state-changing requests · secrets only from env · generic errors, no stack traces · security headers · candidate emails/phones never sent to the browser · `noindex`.
+`Customer` extends `Profile` with matchmaker ownership, status, joining date, and intake notes.
 
-## Assumptions and known limits
+Age is derived from date of birth. Income is normalized to Indian rupees in lakhs per annum (LPA) so profiles can be compared consistently.
 
-- **Persistence:** notes, status changes and "sent" records live in the browser's localStorage because serverless hosting has no writable disk. `lib/client-store.ts` maps directly onto three DB tables. Production needs a database (Postgres/Supabase/Firestore) behind `repository.ts`.
-- **Email is simulated** (`lib/mail.ts`); swap in Resend/SES there.
-- The login rate limiter is in-memory (per instance); use Redis/Upstash when scaling out.
-- Profiles are synthetic and generated by `scripts/generate-data.mjs`; the pool never contains real people.
-- The male-client rules (younger, earns less, shorter) come from the brief. They are encoded as soft, tunable weights, not absolute rules, except the stated age ranges and the kids dealbreaker.
-- Matching is O(pool × factors). For 100k+ profiles, pre-filter with the hard filters in SQL and score only the top candidates.
+Refer to `src/types/index.ts` for the implementation of the data types.
 
-## Write-up (for the submission email)
+## Matching Logic
 
-**Tech choices.** Next.js 14 (App Router) with TypeScript gives one deployable unit for UI and API on Vercel. Data sits behind a repository interface over generated JSON (14 clients, 240 verified candidates), so a real database is a one-file swap. Auth is a signed JWT in an httpOnly cookie, enforced in middleware and again in every route handler along with per-matchmaker ownership checks; inputs are validated with Zod. Styling is hand-written CSS with design tokens: Newsreader for people and headings, Hanken Grotesk for the interface, and a restrained spruce and wine palette, to feel like a premium, calm internal tool rather than a SaaS template.
+The matching engine uses two stages: hard filtering and weighted scoring.
 
-**Matching logic.** A pair must first pass hard filters (opposite gender, both partner age ranges, no firm kids conflict). Remaining candidates are scored on weighted factors that each return a score and a human-readable note. Male clients use the brief's explicit preferences (younger, earns less or similar, shorter or similar, kids alignment) as the heaviest weights. Female clients use a values-first recipe led by family outlook, relocation and life-stage readiness, then career, education and lifestyle. Weights, filters and factors are plain data, so the team can tune or add recipes without touching the engine.
+### 1. Hard Filters
 
-**AI usage and assumptions.** The deterministic engine ranks and the LLM explains: each match gets a matchmaker-style read with one honest tension and talking points, and the Send Match modal pre-drafts a personalised intro the matchmaker can edit. Contact details are never sent to the model, output is schema-validated, and a labelled template fallback keeps the product usable without a key. Assumptions: income is normalised to INR LPA, notes and status persist in localStorage for the demo, and email sending is simulated.
+Candidates are excluded when they fail essential compatibility requirements:
+
+- The candidate has the same gender as the client.
+- Either person's age falls outside the other person's stated partner-age range.
+- One person firmly wants children while the other firmly does not.
+
+These filters are applied before candidates are ranked.
+
+### 2. Weighted Compatibility Scoring
+
+Each matching factor returns a normalized score between 0 and 1, along with a plain-English explanation.
+
+The weighted scores are combined and transformed to separate compatibility tiers:
+
+| Score | Compatibility tier |
+|---|---|
+| 82 and above | High potential |
+| 70–81.99 | Strong fit |
+| Below 70 | Worth exploring |
+
+### Male Client Matching Profile
+
+The male-client matching profile uses the following weights:
+
+| Factor | Weight |
+|---|---:|
+| Age (younger) | 18 |
+| Children preferences | 14 |
+| Height (shorter) | 12 |
+| Income (less or similar) | 12 |
+| Location | 10 |
+| Community | 10 |
+| Family outlook | 8 |
+| Lifestyle | 6 |
+| Relationship timeline | 6 |
+| Languages | 2 |
+| Manglik | 2 |
+
+### Female Client Matching Profile
+
+The female-client profile follows a values-first approach:
+
+| Factor | Weight |
+|---|---:|
+| Family outlook | 14 |
+| Location and relocation | 14 |
+| Children preferences | 12 |
+| Life stage and relationship intent | 10 |
+| Lifestyle | 10 |
+| Career | 10 |
+| Education | 8 |
+| Community | 8 |
+| Earning level | 6 |
+| Age (same to older) | 6 |
+| Height | 3 |
+| Languages | 2 |
+| Manglik | 2 |
+
+The weights reflect the project brief and are tunable configuration values, rather than universal rules for relationship compatibility.
+
+### Extending the Matching Engine
+
+To introduce a new compatibility factor:
+
+1. Implement the scoring function in `factors.ts`.
+2. Add the factor and its weight to the relevant profile in `profiles.ts`.
+3. Add or update tests for the new behavior.
+4. Adjust the weights and thresholds as needed.
+
+Additional matching profiles, such as profiles designed for second marriages, can be introduced without rewriting the core scoring engine.
+
+## How AI Is Used
+
+The deterministic matching engine decides which profiles qualify and calculates their compatibility scores. The language model adds explanations and communication support.
+
+For each match, the AI layer can generate:
+
+- A two- to three-sentence compatibility summary in a matchmaker's voice.
+- An honest discussion of a potential compatibility concern.
+- Two talking points for the matchmaker's conversation.
+- A personalized introduction email of approximately 70–100 words.
+
+The introduction is provided as a draft that the matchmaker can review and edit.
+
+### AI Reliability and Privacy
+
+- Contact details are removed from the dossier sent to the model.
+- AI output is validated with Zod.
+- Failures such as a missing API key, timeout, or invalid JSON trigger a clearly labelled template fallback.
+- The matching engine remains responsible for scoring and ranking candidates.
+
+AI-generated explanations supplement the matching logic; they do not replace its compatibility filters or scoring rules.
+
+## Security
+
+The application includes several security measures:
+
+- JWT session cookies with `httpOnly`, `SameSite=Lax`, and `Secure` in production.
+- Eight-hour session expiry.
+- Password hashing with bcrypt using a cost factor of 12.
+- Login rate limiting and a decoy password comparison to reduce username-enumeration signals.
+- Zod validation for inputs.
+- Ownership checks for client and candidate lookups.
+- Unauthorized access to another matchmaker's clients returns a 404 response.
+- Origin checks for state-changing requests.
+- Environment-based secret configuration.
+- Generic error responses without stack traces.
+- Security headers and `noindex` directives.
+- Removal of candidate email addresses and phone numbers from browser-facing match data.
+
+These controls should be reviewed and tested before the application is used with real customer information.
+
+## Current Limitations and Future Improvements
+
+### Persistence
+
+Notes, status changes, and sent-match records currently use browser `localStorage`. This supports the demo but is not suitable for reliable multi-user production workflows.
+
+The repository abstraction provides a boundary for replacing the current static JSON source with a persistent database. A production implementation should use a database such as PostgreSQL, Supabase, or Firestore, with appropriate authorization and access controls.
+
+### Email Delivery
+
+Email delivery is currently simulated through `lib/mail.ts`. A production implementation could integrate a provider such as Resend or Amazon SES.
+
+### Rate Limiting
+
+The login rate limiter is in-memory and operates per application instance. A distributed solution such as Redis or Upstash would be more appropriate when scaling across instances.
+
+### Synthetic Data
+
+All demo profiles are synthetic and generated by `scripts/generate-data.mjs`. The candidate pool is not intended to contain real people.
+
+### Matching Assumptions
+
+Some preferences in the male-client profile, such as younger age, lower or similar income, and shorter height, come from the project brief. They are implemented as tunable weighted preferences rather than absolute filters, except where an explicit hard filter applies.
+
+The compatibility results are decision-support suggestions, not guarantees of relationship success.
+
+### Scaling
+
+The current matching approach has computational complexity proportional to the candidate pool size multiplied by the number of matching factors.
+
+For a much larger candidate pool, hard filtering could be performed in the database before scoring the remaining candidates.
+
+## Project Write-up
+
+### Technology Choices
+
+The project uses Next.js App Router and TypeScript to provide a unified application for the user interface and API routes. The current data repository uses generated JSON, allowing a future database implementation to be introduced behind the repository boundary.
+
+Authentication uses signed JWTs in HTTP-only cookies, with middleware checks and route-level authorization. Inputs are validated using Zod.
+
+The interface uses custom CSS and design tokens, with Newsreader for headings and people-focused content and Hanken Grotesk for the interface. The restrained spruce and wine color palette is intended to create a premium, calm internal tool rather than a generic SaaS template.
+
+### Matching Logic
+
+Candidates must pass hard filters for gender, mutual age-range compatibility, and firm disagreements about having children.
+
+Eligible candidates are then scored using weighted factors that return normalized scores and human-readable explanations. The male-client profile reflects the preferences specified in the project brief, while the female-client profile prioritizes family outlook, relocation, life stage, career, education, and lifestyle.
+
+The scoring factors, weights, and profiles are configurable so that the team can refine the matching approach without rewriting the engine.
+
+### AI Usage and Assumptions
+
+The deterministic engine ranks candidates, while the AI layer explains compatibility and drafts personalized introductions that matchmakers can review and edit.
+
+Contact details are excluded from AI requests, generated output is schema-validated, and labelled template drafts provide a fallback when AI generation is unavailable.
+
+The current demo uses synthetic profiles, local browser storage for certain workflow changes, and simulated email delivery. These components would need production-grade persistence, email integration, and operational safeguards before handling real customer data.
+
+---
+
+**TDC Matchmaker Desk** is a demonstration of a matchmaker-focused workflow combining profile management, explainable compatibility scoring, AI-assisted communication, and access-control considerations in a single web application.
